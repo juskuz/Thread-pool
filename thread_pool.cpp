@@ -1,19 +1,11 @@
 #include <thread>
 #include <iostream>
 #include <queue>
-#include <string>
 #include <mutex>        // std::mutex, std::lock_guard
 #include <atomic>       // std::atomic_bool
 #include <condition_variable> // std::condition_variable
 #include <chrono>
 
-
-void wait_for()
-{
-    std::cout<<"Going to sleep....\n";
-    std::this_thread::sleep_for(std::chrono::seconds(5));
-    std::cout<<"Waking up...\n";
-}
 
 class Task
 {
@@ -21,7 +13,7 @@ class Task
     bool m_completed;
 
   public:
-    Task(unsigned task_number): m_number(task_number), m_completed(0) {std::cout<<m_number<<std::endl;}
+    Task(unsigned task_number): m_number(task_number), m_completed(0) {std::cout<<"Created task nr: "<<m_number<<std::endl;}
     void setCompleted()
     {
         m_completed = 1;
@@ -32,7 +24,7 @@ class Task
     }
     void runTask()
     {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 };
 
@@ -63,7 +55,7 @@ class SafeQueue
 	void taskCompleted(Task task)
     {
         std::lock_guard<std::mutex> guard(m_mutex);
-        std::cout<<"Task "<<task.getTaskNumber()<<" completed.\n";
+        std::cout<<"Task "<<task.getTaskNumber()<<" completed by thread "<<std::this_thread::get_id()<<std::endl;
         task.setCompleted();
         tasksQueue.push(task);
     }
@@ -84,50 +76,64 @@ class TasksManager
         cond_var.notify_one();
     }
     void disableThreadpool()
-    {
-        isStopped=true;
-        cond_var.notify_all();
-        //for (auto &th : threadsSet) th.join(); // synchronising after setting flag as true
-    }
-
-  public:
-    TasksManager()
-    {
-        isStopped = false;
-        for (unsigned i=0; i<5; i++)
+    {	
+		while (!isStopped)
         {
-            std::thread t1(wait_for);
-            threadsSet.push_back(std::move(t1));  // push back the thread
-        }
-        for (unsigned i=0; i<50; i++)
-        {
-            addTask(i); 
+            std::this_thread::sleep_for(std::chrono::seconds(10));
+            std::unique_lock<std::mutex> lock(m_mutex);
+            if (m_InputQueue.check_if_empty())
+            {
+                isStopped=true;
+                cond_var.notify_all();
+            } 
         }
     }
-    void runManager()
+	
+    void wait_for()
     {
         std::cout<<"Running tasks..."<<std::endl;
         while(!isStopped || m_InputQueue.check_if_empty())
         {
-            std::unique_lock<std::mutex> lock(m_mutex);
-            if (m_InputQueue.check_if_empty())
+            std::cout<<"Going to sleep...."<<std::this_thread::get_id()<<std::endl;
+			std::this_thread::sleep_for(std::chrono::seconds(5));
+			std::cout<<"Waking up and waiting for task..."<<std::endl;
+
+			// here check condition
+			while(!isStopped || !m_InputQueue.check_if_empty())
             {
                 std::cout<<"No tasks... Going to sleep...\n";
                 cond_var.wait(lock); // wait if queue is empty
             }
             else
             {
-            Task runningTask = m_InputQueue.getTask();
-            runningTask.runTask();
-            m_OutputQueue.taskCompleted(runningTask);  // it can be also m_InputQueue
-            }
-            //if (isStopped)
-            {
-                disableThreadpool();
+				Task runningTask = m_InputQueue.getTask();
+                runningTask.runTask();
+                m_OutputQueue.taskCompleted(runningTask);  // it could be also m_InputQueue
             }
         }
-        for (auto &th : threadsSet) th.join(); // synchronising after setting flag as true
+	}
 
+  public:
+    TasksManager()
+    {
+        isStopped = false;
+    }
+    void runManager()
+    {
+        for (unsigned i=0; i<5; i++)
+        {
+            std::thread t1(&TasksManager::wait_for, this);
+            threadsSet.push_back(std::move(t1));  // push back the thread
+        }
+        for (unsigned i=0; i<50; i++)
+        {
+            addTask(i);
+        }
+
+        std::thread t1(&TasksManager::disableThreadpool, this);
+        threadsSet.push_back(std::move(t1));  // push back the thread
+ 
+        for (auto &th : threadsSet) th.join(); // synchronising
         std::cout<<"End.\n";
     }
 };
