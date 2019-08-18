@@ -21,7 +21,19 @@ class Task
     bool m_completed;
 
   public:
-    Task(unsigned task_number): m_number(task_number), m_completed(0) {}
+    Task(unsigned task_number): m_number(task_number), m_completed(0) {std::cout<<m_number<<std::endl;}
+    void setCompleted()
+    {
+        m_completed = 1;
+    }
+    unsigned getTaskNumber()
+    {
+        return m_number;
+    }
+    void runTask()
+    {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
 };
 
 
@@ -34,18 +46,26 @@ class SafeQueue
     Task getTask()
     {
         std::lock_guard<std::mutex> guard(m_mutex);
-        return tasksQueue.front();
+        Task poppedTask = tasksQueue.front();
+        tasksQueue.pop();
+        return poppedTask;
     }
     void pushTask(unsigned taskNumber)
     {
         std::lock_guard<std::mutex> guard(m_mutex);
         tasksQueue.push(Task(taskNumber));
     }
-
     bool check_if_empty()
     {
         std::lock_guard<std::mutex> guard(m_mutex);
         return tasksQueue.empty();
+    }
+	void taskCompleted(Task task)
+    {
+        std::lock_guard<std::mutex> guard(m_mutex);
+        std::cout<<"Task "<<task.getTaskNumber()<<" completed.\n";
+        task.setCompleted();
+        tasksQueue.push(task);
     }
 };
 
@@ -54,47 +74,61 @@ class TasksManager
     std::atomic<bool> isStopped;
     std::mutex m_mutex;
     std::condition_variable cond_var;
-    int a=0;    // shared variable
     std::vector <std::thread> threadsSet;
-    SafeQueue m_safeQueue;
-
+	SafeQueue m_InputQueue;
+    SafeQueue m_OutputQueue;
+	
     void addTask(unsigned taskNumber)
     {
-        m_safeQueue.pushTask(taskNumber);
+        m_InputQueue.pushTask(taskNumber);
         cond_var.notify_one();
     }
     void disableThreadpool()
     {
         isStopped=true;
         cond_var.notify_all();
-        for (auto &th : threadsSet) th.join(); // synchronising after setting flag as true
+        //for (auto &th : threadsSet) th.join(); // synchronising after setting flag as true
     }
 
   public:
     TasksManager()
     {
         isStopped = false;
-        for (unsigned i=0; i<10; i++)
+        for (unsigned i=0; i<5; i++)
         {
             std::thread t1(wait_for);
             threadsSet.push_back(std::move(t1));  // push back the thread
         }
-        for (unsigned i=0; i<200; i++)
+        for (unsigned i=0; i<50; i++)
         {
-            addTask(i);  // push back the thread
+            addTask(i); 
         }
     }
     void runManager()
     {
-        while(!isStopped)
+        std::cout<<"Running tasks..."<<std::endl;
+        while(!isStopped || m_InputQueue.check_if_empty())
         {
-            std::lock_guard<std::mutex> guard(m_mutex);
-            std::cout<<"HERE\n";
-            //cond_var.wait(m_safeQueue.check_if_empty()); // if queue is empty
-            disableThreadpool();
-            m_safeQueue.getTask();
+            std::unique_lock<std::mutex> lock(m_mutex);
+            if (m_InputQueue.check_if_empty())
+            {
+                std::cout<<"No tasks... Going to sleep...\n";
+                cond_var.wait(lock); // wait if queue is empty
+            }
+            else
+            {
+            Task runningTask = m_InputQueue.getTask();
+            runningTask.runTask();
+            m_OutputQueue.taskCompleted(runningTask);  // it can be also m_InputQueue
+            }
+            //if (isStopped)
+            {
+                disableThreadpool();
+            }
         }
-        std::cout<<"Unlocked\n";
+        for (auto &th : threadsSet) th.join(); // synchronising after setting flag as true
+
+        std::cout<<"End.\n";
     }
 };
 
@@ -105,8 +139,3 @@ int main()
     manager.runManager();
     return 0;
 }
-
-
-
-// concurent queue
-// mutexes around addTask and popping task from queue // common mutex
